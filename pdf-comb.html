@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF結合ツール - ローカル＆安全</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter & Noto Sans JP -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- pdf-lib: ブラウザ上でのPDF操作ライブラリ -->
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <!-- SortableJS: スムーズなドラッグ＆ドロップ並び替え用ライブラリ -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans JP', sans-serif;
+        }
+        /* ドラッグ中のゴースト要素のスタイル */
+        .sortable-ghost {
+            opacity: 0.4;
+            background-color: #eff6ff;
+            border: 2px dashed #3b82f6;
+        }
+        .sortable-drag {
+            cursor: grabbing !important;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col justify-between selection:bg-blue-100 selection:text-blue-900">
+
+    <!-- メインコンテナ -->
+    <div class="max-w-3xl w-full mx-auto px-4 py-8 sm:py-12 flex-grow">
+        
+        <!-- ヘッダー -->
+        <header class="text-center mb-8">
+            <div class="inline-flex items-center justify-center p-3 bg-blue-600 text-white rounded-2xl shadow-md shadow-blue-200 mb-4">
+                <i data-lucide="files" class="w-8 h-8"></i>
+            </div>
+            <h1 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">PDF結合ツール</h1>
+            <p class="text-sm sm:text-base text-slate-500 mt-2 max-w-lg mx-auto">
+                複数のPDFファイルを読み込み、ドラッグ＆ドロップで順番を入れ替えて1つのPDFにまとめます。
+            </p>
+            <div class="inline-flex items-center gap-1.5 mt-3 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium">
+                <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
+                <span>完全ローカル処理：ファイルは外部サーバーに送信されません</span>
+            </div>
+        </header>
+
+        <!-- 通知メッセージエリア (alert()の代替) -->
+        <div id="toast-container" class="mb-4 hidden transition-all duration-300">
+            <div id="toast-box" class="flex items-center justify-between p-4 rounded-xl border shadow-sm">
+                <div class="flex items-center gap-3">
+                    <i id="toast-icon" data-lucide="info" class="w-5 h-5 flex-shrink-0"></i>
+                    <p id="toast-message" class="text-sm font-medium"></p>
+                </div>
+                <button onclick="hideToast()" class="p-1 rounded-lg hover:bg-black/5 transition-colors">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- ドロップゾーン -->
+        <div id="drop-zone" 
+             class="relative group border-2 border-dashed border-slate-300 hover:border-blue-500 bg-white hover:bg-blue-50/40 rounded-2xl p-8 sm:p-10 text-center cursor-pointer transition-all duration-200 shadow-sm">
+            <input type="file" id="file-input" accept="application/pdf,.pdf" multiple class="hidden">
+            
+            <div class="flex flex-col items-center justify-center pointer-events-none">
+                <div class="w-14 h-14 rounded-full bg-blue-50 group-hover:bg-blue-100 text-blue-600 flex items-center justify-center mb-4 transition-colors">
+                    <i data-lucide="upload-cloud" class="w-7 h-7"></i>
+                </div>
+                <p class="text-base sm:text-lg font-semibold text-slate-700 group-hover:text-blue-700 transition-colors">
+                    ここにPDFファイルをドラッグ＆ドロップ
+                </p>
+                <p class="text-xs sm:text-sm text-slate-400 mt-1">
+                    または <span class="text-blue-600 font-medium underline underline-offset-2">クリックしてファイルを選択</span>（複数選択可）
+                </p>
+            </div>
+        </div>
+
+        <!-- ファイルリストセクション -->
+        <div id="list-section" class="mt-8 hidden">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div class="flex items-center gap-2">
+                    <h2 class="text-sm font-bold text-slate-700 uppercase tracking-wider">結合するファイル一覧</h2>
+                    <span id="file-count-badge" class="px-2.5 py-0.5 text-xs font-semibold bg-slate-200 text-slate-700 rounded-full">0件</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button id="sort-name-btn" type="button" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm">
+                        <i data-lucide="arrow-down-a-z" class="w-3.5 h-3.5"></i>
+                        名前順に並べ替え
+                    </button>
+                    <button id="clear-all-btn" type="button" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-rose-600 bg-white border border-rose-200 rounded-lg hover:bg-rose-50 transition-colors shadow-sm">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        すべて削除
+                    </button>
+                </div>
+            </div>
+
+            <p class="text-xs text-slate-400 mb-3 flex items-center gap-1">
+                <i data-lucide="grip-vertical" class="w-3.5 h-3.5"></i>
+                <span>左側のハンドルをドラッグして結合順を入れ替えられます</span>
+            </p>
+
+            <!-- SortableJSターゲットリスト -->
+            <ul id="file-list" class="space-y-2.5">
+                <!-- JSで動的にアイテムが挿入されます -->
+            </ul>
+
+            <!-- 出力設定＆結合ボタンカード -->
+            <div class="mt-6 bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+                    <div class="flex-grow">
+                        <label for="output-filename" class="block text-xs font-semibold text-slate-600 mb-1.5">
+                            出力ファイル名
+                        </label>
+                        <div class="relative flex items-center">
+                            <input type="text" id="output-filename" value="merged_document" placeholder="ファイル名を入力"
+                                   class="w-full pl-3.5 pr-12 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all">
+                            <span class="absolute right-3.5 text-xs font-semibold text-slate-400 select-none">.pdf</span>
+                        </div>
+                    </div>
+
+                    <button id="merge-btn" type="button" 
+                            class="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-xl shadow-md shadow-blue-200 transition-all cursor-pointer">
+                        <i data-lucide="merge" class="w-4 h-4"></i>
+                        <span id="merge-btn-text">PDFを結合してダウンロード</span>
+                    </button>
+                </div>
+                
+                <!-- 合計情報 -->
+                <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                    <span>合計ページ数: <strong id="total-pages" class="text-slate-800">0</strong> ページ</span>
+                    <span>合計サイズ: <strong id="total-size" class="text-slate-800">0 KB</strong></span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- フッター -->
+    <footer class="text-center py-6 text-xs text-slate-400">
+        Powered by pdf-lib & SortableJS • すべての処理はお使いのデバイス内で完結します
+    </footer>
+
+    <script>
+        // アイコンの初期化
+        lucide.createIcons();
+
+        // アプリケーションの状態管理
+        // 各要素: { id: string, file: File, name: string, size: number, pageCount: number, arrayBuffer: ArrayBuffer }
+        let pdfItems = [];
+
+        // DOM要素の取得
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const listSection = document.getElementById('list-section');
+        const fileListEl = document.getElementById('file-list');
+        const fileCountBadge = document.getElementById('file-count-badge');
+        const totalPagesEl = document.getElementById('total-pages');
+        const totalSizeEl = document.getElementById('total-size');
+        const sortNameBtn = document.getElementById('sort-name-btn');
+        const clearAllBtn = document.getElementById('clear-all-btn');
+        const mergeBtn = document.getElementById('merge-btn');
+        const mergeBtnText = document.getElementById('merge-btn-text');
+        const outputFilenameInput = document.getElementById('output-filename');
+
+        // トースト通知の要素
+        const toastContainer = document.getElementById('toast-container');
+        const toastBox = document.getElementById('toast-box');
+        const toastIcon = document.getElementById('toast-icon');
+        const toastMessage = document.getElementById('toast-message');
+        let toastTimeout = null;
+
+        /**
+         * トースト通知を表示する (alertの代替)
+         * @param {string} message 表示するメッセージ
+         * @param {'info'|'success'|'error'|'warning'} type 通知の種類
+         */
+        function showToast(message, type = 'info') {
+            if (toastTimeout) clearTimeout(toastTimeout);
+
+            toastMessage.textContent = message;
+            toastBox.className = 'flex items-center justify-between p-4 rounded-xl border shadow-sm ';
+
+            let iconName = 'info';
+            if (type === 'success') {
+                toastBox.classList.add('bg-emerald-50', 'border-emerald-200', 'text-emerald-800');
+                iconName = 'check-circle-2';
+            } else if (type === 'error') {
+                toastBox.classList.add('bg-rose-50', 'border-rose-200', 'text-rose-800');
+                iconName = 'alert-circle';
+            } else if (type === 'warning') {
+                toastBox.classList.add('bg-amber-50', 'border-amber-200', 'text-amber-800');
+                iconName = 'alert-triangle';
+            } else {
+                toastBox.classList.add('bg-blue-50', 'border-blue-200', 'text-blue-800');
+                iconName = 'info';
+            }
+
+            toastIcon.setAttribute('data-lucide', iconName);
+            lucide.createIcons();
+            toastContainer.classList.remove('hidden');
+
+            toastTimeout = setTimeout(() => {
+                hideToast();
+            }, 5000);
+        }
+
+        function hideToast() {
+            toastContainer.classList.add('hidden');
+        }
+
+        /**
+         * バイト数を読みやすい形式に変換
+         */
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        /**
+         * ユニークID生成
+         */
+        function generateId() {
+            return 'pdf_' + Math.random().toString(36).substring(2, 11);
+        }
+
+        // SortableJSの初期化（ドラッグ＆ドロップによる並び替え）
+        const sortable = new Sortable(fileListEl, {
+            animation: 180,
+            handle: '.drag-handle',
+            ghostClass: 'sortable-ghost',
+            dragClass: 'sortable-drag',
+            onEnd: function () {
+                // DOMの並び順に合わせてpdfItems配列を更新
+                const newOrderIds = Array.from(fileListEl.children).map(li => li.dataset.id);
+                const reordered = [];
+                newOrderIds.forEach(id => {
+                    const found = pdfItems.find(item => item.id === id);
+                    if (found) reordered.push(found);
+                });
+                pdfItems = reordered;
+                updateOrderBadges();
+            }
+        });
+
+        // ドロップゾーンのイベント設定
+        dropZone.addEventListener('click', () => fileInput.click());
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('border-blue-500', 'bg-blue-50/70');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('border-blue-500', 'bg-blue-50/70');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-blue-500', 'bg-blue-50/70');
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                handleFiles(e.dataTransfer.files);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files.length > 0) {
+                handleFiles(e.target.files);
+                // 同じファイルを再度選択できるようにリセット
+                fileInput.value = '';
+            }
+        });
+
+        /**
+         * 選択・ドロップされたファイルの読み込みと検証
+         */
+        async function handleFiles(fileList) {
+            const files = Array.from(fileList);
+            let addedCount = 0;
+            let skippedCount = 0;
+            let encryptedErrorCount = 0;
+
+            for (const file of files) {
+                // PDFファイルかどうかのチェック
+                if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+                    skippedCount++;
+                    continue;
+                }
+
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    // pdf-libで事前読み込みしてページ数取得と破損・暗号化チェック
+                    const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
+                    const pageCount = pdfDoc.getPageCount();
+
+                    pdfItems.push({
+                        id: generateId(),
+                        file: file,
+                        name: file.name,
+                        size: file.size,
+                        pageCount: pageCount,
+                        arrayBuffer: arrayBuffer
+                    });
+                    addedCount++;
+                } catch (err) {
+                    console.error('PDF読み込みエラー:', file.name, err);
+                    if (err.message && err.message.includes('encrypted')) {
+                        encryptedErrorCount++;
+                    } else {
+                        skippedCount++;
+                    }
+                }
+            }
+
+            renderList();
+
+            // 結果に応じた通知
+            if (encryptedErrorCount > 0) {
+                showToast(`パスワード保護されたPDF（${encryptedErrorCount}件）は読み込めませんでした。解除してからお試しください。`, 'error');
+            } else if (skippedCount > 0 && addedCount === 0) {
+                showToast('PDF形式以外のファイル、または破損したファイルは読み込めません。', 'error');
+            } else if (skippedCount > 0) {
+                showToast(`${addedCount}件のPDFを追加しました（${skippedCount}件の非対応ファイルをスキップ）。`, 'warning');
+            } else if (addedCount > 0) {
+                hideToast();
+            }
+        }
+
+        /**
+         * リスト全体の再描画
+         */
+        function renderList() {
+            fileListEl.innerHTML = '';
+
+            if (pdfItems.length === 0) {
+                listSection.classList.add('hidden');
+                return;
+            }
+
+            listSection.classList.remove('hidden');
+
+            let totalPages = 0;
+            let totalBytes = 0;
+
+            pdfItems.forEach((item, index) => {
+                totalPages += item.pageCount;
+                totalBytes += item.size;
+
+                const li = document.createElement('li');
+                li.dataset.id = item.id;
+                li.className = 'flex items-center justify-between gap-3 p-3 sm:p-3.5 bg-white border border-slate-200 rounded-xl shadow-sm hover:border-slate-300 transition-all';
+
+                li.innerHTML = `
+                    <div class="flex items-center gap-3 min-w-0 flex-grow">
+                        <!-- ドラッグハンドル -->
+                        <div class="drag-handle cursor-grab active:cursor-grabbing p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 touch-none" title="ドラッグして順番を変更">
+                            <i data-lucide="grip-vertical" class="w-5 h-5"></i>
+                        </div>
+                        
+                        <!-- 順番バッジ -->
+                        <span class="order-badge flex-shrink-0 w-6 h-6 rounded-full bg-blue-50 text-blue-600 font-bold text-xs flex items-center justify-center border border-blue-100">
+                            ${index + 1}
+                        </span>
+
+                        <!-- PDFアイコン -->
+                        <div class="flex-shrink-0 w-9 h-9 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                            <i data-lucide="file-text" class="w-5 h-5"></i>
+                        </div>
+
+                        <!-- ファイル情報 -->
+                        <div class="min-w-0 flex-grow">
+                            <p class="text-sm font-semibold text-slate-800 truncate" title="${escapeHtml(item.name)}">
+                                ${escapeHtml(item.name)}
+                            </p>
+                            <div class="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                                <span>${item.pageCount} ページ</span>
+                                <span>•</span>
+                                <span>${formatBytes(item.size)}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 操作ボタン（上下移動・削除） -->
+                    <div class="flex items-center gap-1 flex-shrink-0">
+                        <button type="button" onclick="moveItem('${item.id}', -1)" ${index === 0 ? 'disabled' : ''} 
+                                class="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:pointer-events-none rounded-lg hover:bg-slate-100 transition-colors" title="上へ移動">
+                            <i data-lucide="chevron-up" class="w-4 h-4"></i>
+                        </button>
+                        <button type="button" onclick="moveItem('${item.id}', 1)" ${index === pdfItems.length - 1 ? 'disabled' : ''} 
+                                class="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:pointer-events-none rounded-lg hover:bg-slate-100 transition-colors" title="下へ移動">
+                            <i data-lucide="chevron-down" class="w-4 h-4"></i>
+                        </button>
+                        <button type="button" onclick="removeItem('${item.id}')" 
+                                class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors ml-1" title="リストから削除">
+                            <i data-lucide="x" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                `;
+                fileListEl.appendChild(li);
+            });
+
+            // 統計情報の更新
+            fileCountBadge.textContent = `${pdfItems.length}件`;
+            totalPagesEl.textContent = totalPages.toLocaleString();
+            totalSizeEl.textContent = formatBytes(totalBytes);
+
+            // 結合ボタンの有効化制御（1件以上あれば結合・出力可能）
+            mergeBtn.disabled = pdfItems.length === 0;
+
+            lucide.createIcons();
+        }
+
+        /**
+         * ドラッグ並び替え後に番号バッジと上下ボタン状態のみを更新
+         */
+        function updateOrderBadges() {
+            const items = fileListEl.children;
+            Array.from(items).forEach((li, index) => {
+                const badge = li.querySelector('.order-badge');
+                if (badge) badge.textContent = index + 1;
+            });
+            // 上下ボタンのdisabled状態も正確に反映するため再描画
+            renderList();
+        }
+
+        /**
+         * ボタンクリックによる上下移動（モバイルやキーボード操作向け）
+         */
+        window.moveItem = function(id, direction) {
+            const index = pdfItems.findIndex(item => item.id === id);
+            if (index === -1) return;
+            const newIndex = index + direction;
+            if (newIndex < 0 || newIndex >= pdfItems.length) return;
+
+            const temp = pdfItems[index];
+            pdfItems[index] = pdfItems[newIndex];
+            pdfItems[newIndex] = temp;
+
+            renderList();
+        };
+
+        /**
+         * 個別アイテムの削除
+         */
+        window.removeItem = function(id) {
+            pdfItems = pdfItems.filter(item => item.id !== id);
+            renderList();
+        };
+
+        /**
+         * ファイル名順（自然順ソート）で並べ替え
+         */
+        sortNameBtn.addEventListener('click', () => {
+            pdfItems.sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true, sensitivity: 'base' }));
+            renderList();
+            showToast('ファイル名の昇順で並べ替えました。', 'info');
+        });
+
+        /**
+         * すべて削除
+         */
+        clearAllBtn.addEventListener('click', () => {
+            pdfItems = [];
+            renderList();
+            hideToast();
+        });
+
+        /**
+         * HTMLエスケープ処理
+         */
+        function escapeHtml(str) {
+            return str.replace(/[&<>"']/g, function(match) {
+                const escape = {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#39;'
+                };
+                return escape[match];
+            });
+        }
+
+        /**
+         * PDF結合およびダウンロード処理
+         */
+        mergeBtn.addEventListener('click', async () => {
+            if (pdfItems.length === 0) return;
+
+            // ボタンをローディング状態にする
+            mergeBtn.disabled = true;
+            const originalText = mergeBtnText.textContent;
+            mergeBtnText.textContent = '結合処理中...';
+
+            try {
+                // 新しい空のPDFドキュメントを作成
+                const mergedPdf = await PDFLib.PDFDocument.create();
+
+                // リストの順番通りに各PDFの全ページをコピーして追加
+                for (const item of pdfItems) {
+                    const srcDoc = await PDFLib.PDFDocument.load(item.arrayBuffer);
+                    const copiedPages = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
+                    copiedPages.forEach((page) => {
+                        mergedPdf.addPage(page);
+                    });
+                }
+
+                // 結合されたPDFをバイト配列として保存
+                const mergedPdfBytes = await mergedPdf.save();
+
+                // ファイル名の整形
+                let filename = outputFilenameInput.value.trim();
+                if (!filename) filename = 'merged_document';
+                if (!filename.toLowerCase().endsWith('.pdf')) {
+                    filename += '.pdf';
+                }
+
+                // Blobを作成してダウンロードをトリガー
+                const blob = new Blob([mergedPdfBytes], { type: 'application/pdf' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                // メモリ解放
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+                showToast(`${pdfItems.length}件のPDFを結合し、「${filename}」としてダウンロードしました。`, 'success');
+            } catch (error) {
+                console.error('PDF結合エラー:', error);
+                showToast('PDFの結合中にエラーが発生しました。ファイルが破損していないか確認してください。', 'error');
+            } finally {
+                mergeBtn.disabled = false;
+                mergeBtnText.textContent = originalText;
+            }
+        });
+    </script>
+</body>
+</html>
